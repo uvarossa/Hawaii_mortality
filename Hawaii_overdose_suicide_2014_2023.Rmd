@@ -1,0 +1,459 @@
+---
+title: "Hawaii_overdose"
+author: "Eteri Machavariani"
+date: "2025-04-19"
+output: html_document
+---
+
+```{r}
+# necessary libraries
+library(tidyverse)
+library(writexl) 
+library(tidyr)
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(MASS)
+library(lmtest)
+
+# setting working directory
+setwd("/Users/etuna/Desktop/NYU/CDC mortality data/Hawaii/Rcode Hawaii")
+
+# loading data, filtering Hawaii fips and relevant years
+drugs <- read.csv("/Users/etuna/Desktop/NYU/CDC mortality data/Overdose data/alldrugs_2014_2023.csv") %>% 
+  filter(fips %in% c(15001, 15003, 15005, 15007, 15009)) %>% 
+  group_by(fips, year, month) %>% 
+  # creating sum of events for each month
+  summarise(drugs = sum(events, na.rm = TRUE)) %>% 
+  ungroup()
+
+suic <- read.csv("//Users/etuna/Desktop/NYU/CDC mortality data/Suicides data/suicides_by_county_2014_2023.csv") %>% 
+  filter(fips %in% c(15001, 15003, 15005, 15007, 15009)) %>% 
+  group_by(fips, year, month) %>% 
+  # creating sum of events for each month
+  summarise(suic = sum(events, na.rm = TRUE)) %>% 
+  ungroup()
+
+dt <- full_join(drugs, suic)
+```
+
+
+```{r}
+# creating labels for fips
+fips_to_county <- c(
+  "15001" = "Hawaii",
+  "15003" = "Honolulu",
+  "15005" = "Kalawao", 
+  "15007" = "Kauai",
+  "15009" = "Maui"
+)
+
+# labeling fips with names
+dt <- dt %>%
+  mutate(
+    fips = as.character(fips),
+    county = fips_to_county[fips]
+  ) %>% 
+  dplyr::select(-fips)
+
+dt <- dt %>%
+  group_by(year, county) %>%
+  complete(month = 1:12, fill = list(drugs = NA, suic = NA)) %>%
+  ungroup() %>%
+  arrange(county, year, month) %>% 
+  mutate(across(c(drugs, suic), ~replace_na(., 0)),
+         total = suic + drugs)
+  
+  
+
+```
+
+
+```{r}
+# Creating population data frame for merging
+# 2020-2024
+pop_rates <- read_xlsx("/Users/etuna/Desktop/NYU/CDC mortality data/Hawaii/co-est2024-pop-15.xlsx")
+# 2010-2019
+pop_rates_1 <- read_xlsx("/Users/etuna/Desktop/NYU/CDC mortality data/Hawaii/co-est2019-annres-15.xlsx")
+pop_rates <- pop_rates[-c(1:4, 10:16), ]
+pop_rates_1 <- pop_rates_1[-c(1:4, 10:16), ]
+colnames(pop_rates)[c(1, 3:6)] <- c("county", "2020", "2021", "2022", "2023")
+
+
+pop_rates <- pop_rates[ , -c(2,7)]
+pop_rates_1 <- pop_rates_1[ , -c(2:7)]
+colnames(pop_rates_1)[c(1:7)] <- c("county", "2014", "2015", "2016", "2017", "2018", "2019")
+county_names <- c("Hawaii", "Honolulu", "Kalawao", "Kauai", "Maui")
+pop_rates$county[1:5] <- county_names
+pop_rates_1$county[1:5] <- county_names
+
+pop_rates <- left_join(pop_rates_1, pop_rates)
+
+pop_rates[ , 2:11] <- lapply(pop_rates[ , 2:11], as.numeric)
+
+population_long <- pop_rates %>%
+  pivot_longer(
+    cols = -county,
+    names_to = "year",
+    values_to = "population"
+  ) %>%
+  mutate(year = as.integer(year)) %>% 
+    bind_rows(
+    group_by(., year) %>%
+      summarize(
+        county = "Total",
+        population = sum(population),
+        .groups = 'drop'
+      )
+  )
+  
+
+dt <- dt %>%
+  left_join(population_long, by = c("county", "year")) %>% 
+  mutate(rates_total = as.numeric(total) / as.numeric(population) * 100000
+         )
+```
+
+```{r}
+
+# separating Maui and other counties:
+
+dt_maui <- dt %>%
+  filter(county == "Maui") %>%
+  group_by(year, month) %>%
+  summarise(
+    drugs = sum(drugs, na.rm = TRUE),
+    suic  = sum(suic,  na.rm = TRUE),
+    total = sum(total, na.rm = TRUE),
+    population = mean(population, na.rm = TRUE), 
+    .groups = 'drop'
+  ) %>%
+  mutate(county = "Maui")
+
+
+dt_other <- dt %>%
+  filter(county != "Maui") %>%
+  group_by(year, month) %>%
+  summarise(
+    drugs = sum(drugs, na.rm = TRUE),
+    suic  = sum(suic,  na.rm = TRUE),
+    total = sum(total, na.rm = TRUE),
+    population = sum(population, na.rm = TRUE),  
+    .groups = 'drop'
+  ) %>%
+  mutate(county = "other counties")
+
+
+population_total <- population_long %>% 
+  filter(county=="Total") %>% 
+  dplyr::select(-county)
+
+dt_total <- dt %>%
+  group_by(year, month) %>%
+  summarise(
+    drugs = sum(drugs, na.rm = TRUE),
+    suic  = sum(suic,  na.rm = TRUE),
+    total = sum(total, na.rm = TRUE),
+    .groups = 'drop'
+  )  %>%
+  left_join(population_total, by = c("year")) %>% 
+  mutate(rates = as.numeric(total) / as.numeric(population) * 100000) %>% 
+  arrange(year, month) %>%
+  mutate(
+    rates = total / population * 100000,  
+    date  = ymd(paste(year, month, "01"))
+  )
+
+
+dt_long <- bind_rows(dt_maui, dt_other) %>%
+  arrange(year, month, county) %>%
+  mutate(
+    rates = total / population * 100000,  
+    date  = ymd(paste(year, month, "01"))
+  )
+
+```
+
+
+```{r}
+# maui vs others
+dt_long <- dt_long %>%
+  mutate(date = ymd(paste(year, month, "01")))
+
+ggplot(dt_long, aes(x = date, y = rates, color = county)) +
+  geom_line(linewidth = 1) +
+    geom_vline(xintercept = as.numeric(ymd("2023-08-01")),
+             linetype = "dashed", color = "red", linewidth = 1) +
+  labs(
+    title = "Combined Suicide and Overdose Rates in Hawaii (2020-2023)",
+    x = "",
+    y = "Per 100,000 population"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "bottom"
+  )
+
+# plot of total combined suicide and death rates
+
+ggplot(dt_total, aes(x = date, y = rates)) +
+  geom_line(linewidth = 1, color = "violet") +
+  geom_vline(xintercept = as.numeric(ymd("2023-08-01")),
+             linetype = "dashed", color = "red", linewidth = 1) +
+  labs(
+    title = "Combined Suicide and Overdose Rates in Hawaii (2020-2023)",
+    x = "",
+    y = "Per 100,000 population"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "bottom"
+  )
+```
+
+```{r}
+
+# figure of Maui vs other counties
+
+dt_long <- dt_long %>%
+  mutate(date = ymd(paste(year, month, "01")))  
+
+ggplot(dt_long, aes(x = date, y = rates, color = county)) +
+  geom_line(linewidth = 0.5) +
+  geom_vline(
+    xintercept = as.numeric(ymd("2023-08-01")),
+    linetype = "dashed", color = "red", linewidth = 0.5
+  ) +
+  labs(
+    x = "",
+    y = "Combined suicide/overdose death rates per 100,000",
+    color = NULL  
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_blank(),
+    legend.position = "bottom"
+  ) +
+  scale_color_manual(
+    values = c("other counties" = "darkblue", "Maui" = "darkorange"),
+    labels = c("Maui county", "Other non-Maui counties in Hawai'i")
+  ) +
+  scale_x_date(
+    date_breaks = "1 year",
+    date_labels = "%Y",
+    limits = c(ymd("2014-01-01"), ymd("2024-01-01"))
+    ) 
+
+```
+
+
+```{r}
+
+######### analyses ######### 
+
+# Making sure dt is ordered by date
+dt_total <- dt_total %>% arrange(date)
+
+
+# creating a binary August 2023 variable
+dt_total <- dt_total %>%
+  mutate(aug2023 = ifelse(date == as.Date("2023-08-01"), 1, 0))
+
+# Fitting a linear model: rates over time
+model_trend <- lm(rates ~ date, data = dt_total)
+summary(model_trend)
+
+# linear model with binary August 2023
+model_peak <- lm(rates ~ date + aug2023, data = dt_total)
+summary(model_peak)
+
+# creating a binary August variable
+dt_total <- dt_total %>%
+  mutate(is_august = ifelse(month == 8, 1, 0))
+
+# linear model with binary August 2023 and binary August
+model_august <-lm(rates ~ date + is_august + aug2023, data = dt_total)
+summary(model_august)
+
+
+# Plotting residuals vs. fitted values
+plot(fitted(model_august), residuals(model_august), 
+     xlab = "Fitted Values", ylab = "Residuals", 
+     main = "Residuals vs. Fitted Plot")
+abline(h = 0, col = "red", lwd = 2)
+
+
+# using a Poisson regression, with an offset for population:
+pois_model <- glm(total ~ date + aug2023 + is_august, offset = log(population), family = poisson, data = dt_total)
+summary(pois_model)
+exp(summary(pois_model)$coef)
+exp(confint(pois_model, level = 0.95))
+
+
+# Plotting residuals vs. fitted values
+plot(fitted(pois_model), residuals(pois_model), 
+     xlab = "Fitted Values", ylab = "Residuals", 
+     main = "Residuals vs. Fitted Plot")
+abline(h = 0, col = "red", lwd = 2)
+
+# Deviance residuals plot
+plot(residuals(pois_model, type = "deviance"), 
+     main = "Deviance Residuals", 
+     xlab = "Index", ylab = "Deviance Residuals")
+abline(h = 0, col = "red")
+
+# Performing Durbin-Watson test
+dwtest(pois_model)
+
+# checking if residual deviance >> degrees of freedom
+summary(pois_model)$deviance / summary(pois_model)$df.residual
+
+# negative binomial model
+nb_model <- glm.nb(total ~ date + is_august + aug2023 + offset(log(population)), data = dt_total)
+exp(summary(nb_model)$coef["aug2023",])
+exp(confint(nb_model, level = 0.95))
+
+# Plot residuals vs fitted values
+plot(fitted(nb_model), residuals(nb_model), 
+     main = "Residuals vs Fitted Values",
+     xlab = "Fitted Values", ylab = "Residuals")
+abline(h = 0, col = "red")
+
+
+# Deviance residuals plot
+plot(residuals(nb_model, type = "deviance"), 
+     main = "Deviance Residuals", 
+     xlab = "Index", ylab = "Deviance Residuals")
+abline(h = 0, col = "red")
+
+
+# Pearson chi-squared statistic for goodness of fit
+pearson_chi <- sum(residuals(nb_model, type = "pearson")^2)
+df_residual <- df.residual(nb_model)
+pearson_chi / df_residual  # this should be close to 1 if the fit is good
+
+# quasi-poisson model
+qp_model <- glm(total ~ date + is_august + aug2023 + offset(log(population)), 
+                family = quasipoisson, data = dt_total)
+summary(qp_model)
+exp(summary(qp_model)$coef["aug2023",])
+exp(confint(qp_model, level = 0.95))
+```
+
+
+```{r}
+####  doing the same for only Maui data
+
+# Making sure dt is ordered by date
+dt_maui <- dt_maui %>% 
+  mutate(date  = ymd(paste(year, month, "01")),
+         rates = total / population * 100000,) %>% 
+  arrange(date) 
+  
+# creating a binary August variable
+dt_maui <- dt_maui %>%
+  mutate(is_august = ifelse(month == 8, 1, 0))
+
+# creating a binary August 2023 variable
+dt_maui <- dt_maui %>%
+  mutate(aug2023 = ifelse(date == as.Date("2023-08-01"), 1, 0))
+
+# Fitting a linear model: rates over time
+model_trend_maui <- lm(rates ~ date, data = dt_maui)
+summary(model_trend_maui)
+
+# linear model with binary August 2023
+model_peak_maui <- lm(rates ~ date + aug2023, data = dt_maui)
+summary(model_peak_maui)
+
+
+# linear model with binary August 2023 and binary August
+model_august_maui <-lm(rates ~ date + is_august + aug2023, data = dt_maui)
+summary(model_august_maui)
+
+
+# Plotting residuals vs. fitted values
+plot(fitted(model_august_maui), residuals(model_august_maui), 
+     xlab = "Fitted Values", ylab = "Residuals", 
+     main = "Residuals vs. Fitted Plot")
+abline(h = 0, col = "red", lwd = 2)
+
+
+# using a Poisson regression, with an offset for population:
+pois_model_maui <- glm(total ~ date + aug2023 + is_august, offset = log(population), family = poisson, data = dt_maui)
+summary(pois_model_maui)
+exp(summary(pois_model_maui)$coef)
+exp(confint(pois_model_maui, level = 0.95))
+
+
+# Plotting residuals vs. fitted values
+plot(fitted(pois_model_maui), residuals(pois_model_maui), 
+     xlab = "Fitted Values", ylab = "Residuals", 
+     main = "Residuals vs. Fitted Plot")
+abline(h = 0, col = "red", lwd = 2)
+
+# Deviance residuals plot
+plot(residuals(pois_model_maui, type = "deviance"), 
+     main = "Deviance Residuals", 
+     xlab = "Index", ylab = "Deviance Residuals")
+abline(h = 0, col = "red")
+
+# Performing Durbin-Watson test
+dwtest(pois_model_maui)
+
+# checking if residual deviance >> degrees of freedom
+summary(pois_model)$deviance / summary(pois_model)$df.residual
+
+# negative binomial model
+nb_model_maui <- glm.nb(total ~ date + is_august + aug2023 + offset(log(population)), data = dt_maui)
+exp(summary(nb_model_maui)$coef["aug2023",])
+exp(confint(nb_model_maui, level = 0.95))
+# algorithm failed to converge
+# we will conduct sensitivity analysis with quasi-poisson
+
+
+# quasi-poisson model
+qp_model_maui <- glm(total ~ date + is_august + aug2023 + offset(log(population)), 
+                family = quasipoisson, data = dt_maui)
+summary(qp_model_maui)
+exp(summary(qp_model_maui)$coef["aug2023",])
+exp(confint(qp_model_maui, level = 0.95))
+
+```
+
+
+```{r}
+##### plot with a trend line ###########
+ 
+# Create a time plot with the fitted trend line
+ggplot(dt_total, aes(x = date, y = rates)) +
+  geom_line(color = "darkblue", size = 0.5) +  # Line plot to visualize the trend
+  labs(title = "",
+       x = "",
+       y = "Combined suicide/overdose death rates per 100,000") +
+  geom_smooth(method = "lm", color = "darkred", linetype = "dotted", size = 0.5) +  # Fitted linear trend
+  geom_vline(
+    xintercept = as.numeric(ymd("2023-08-01")),  # Vertical reference line
+    linetype = "dashed", color = "red", linewidth = 0.5
+  ) +
+  annotate("text", x = ymd("2023-08-01"), 
+           y = max(dt_total$rates, na.rm = TRUE) * 0.95,  # Adjust height as needed
+           label = "August 2023", 
+           color = "red", vjust =40.0, hjust = 1.1)  +
+    scale_x_date(
+    date_breaks = "1 year",
+    date_labels = "%Y",
+    limits = c(ymd("2014-01-01"), ymd("2024-01-01"))
+    ) +
+    theme_minimal() +
+  theme(
+    axis.text.x = element_text(),
+    panel.grid.major.x = element_line(color = "grey80", linewidth = 0.3))
+
+
+
+```
+
