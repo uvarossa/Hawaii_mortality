@@ -10,7 +10,6 @@
 
 
 rm(list = ls())
-#rcode - https://stackoverflow.com/questions/70657014/how-do-i-import-a-file-into-r-with-extension-dusmcpub
 
 file_path <- "/User/Data2014"
 file.exists(file_path)
