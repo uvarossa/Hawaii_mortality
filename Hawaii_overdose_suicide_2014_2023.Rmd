@@ -1,9 +1,4 @@
----
-title: "Hawaii_overdose"
-author: "Eteri Machavariani"
-date: "2025-04-19"
-output: html_document
----
+
 
 ```{r}
 # necessary libraries
@@ -17,18 +12,15 @@ library(lubridate)
 library(MASS)
 library(lmtest)
 
-# setting working directory
-setwd("/Users/etuna/Desktop/NYU/CDC mortality data/Hawaii/Rcode Hawaii")
-
 # loading data, filtering Hawaii fips and relevant years
-drugs <- read.csv("/Users/etuna/Desktop/NYU/CDC mortality data/Overdose data/alldrugs_2014_2023.csv") %>% 
+drugs <- read.csv("overdose_data") %>% 
   filter(fips %in% c(15001, 15003, 15005, 15007, 15009)) %>% 
   group_by(fips, year, month) %>% 
   # creating sum of events for each month
   summarise(drugs = sum(events, na.rm = TRUE)) %>% 
   ungroup()
 
-suic <- read.csv("//Users/etuna/Desktop/NYU/CDC mortality data/Suicides data/suicides_by_county_2014_2023.csv") %>% 
+suic <- read.csv("suicide_data") %>% 
   filter(fips %in% c(15001, 15003, 15005, 15007, 15009)) %>% 
   group_by(fips, year, month) %>% 
   # creating sum of events for each month
@@ -73,9 +65,9 @@ dt <- dt %>%
 ```{r}
 # Creating population data frame for merging
 # 2020-2024
-pop_rates <- read_xlsx("/Users/etuna/Desktop/NYU/CDC mortality data/Hawaii/co-est2024-pop-15.xlsx")
+pop_rates <- read_xlsx("co-est2024-pop-15.xlsx")
 # 2010-2019
-pop_rates_1 <- read_xlsx("/Users/etuna/Desktop/NYU/CDC mortality data/Hawaii/co-est2019-annres-15.xlsx")
+pop_rates_1 <- read_xlsx("co-est2019-annres-15.xlsx")
 pop_rates <- pop_rates[-c(1:4, 10:16), ]
 pop_rates_1 <- pop_rates_1[-c(1:4, 10:16), ]
 colnames(pop_rates)[c(1, 3:6)] <- c("county", "2020", "2021", "2022", "2023")
